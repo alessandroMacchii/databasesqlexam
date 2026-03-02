@@ -20,7 +20,7 @@ with conn:
         (driverid INTEGER PRIMARY KEY,
         name TEXT NOT NULL, 
         surname TEXT NOT NULL,
-        number INT CHECK(number>1 AND number<100),
+        number INT CHECK(number>=1),
         code TEXT CHECK(length(code) = 3 AND code = UPPER(code)),
         dob DATE,
         nationality TEXT,

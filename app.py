@@ -8,25 +8,56 @@ conn = sqlite3.connect("f1.db", check_same_thread=False)
 st.title("visualizzatore e modificatore data f1!")
 #st.write("c'è da divertirsi")
 st.sidebar.title("menù di scelta per operazioni")
-sidebar=st.sidebar.radio("scegli tra le ozpioni", ["ricerca circuiti per nazione", "inserimento di dati"])
+sidebar=st.sidebar.radio("scegli tra le ozpioni", ["search circuits", "insert new data", "tracks per year visualization"])
 
 def form_nuovo_pilota(conn):
     st.write("inserisci i dati del pilota")
     with st.form("form_pilota"):
-        nome = st.text_input("nome*")
-        cognome = st.text_input("cognome*")
-        codice = st.text_input("codice del pilota (tipo LEC)")
+        name = st.text_input("name*")
+        surname = st.text_input("surname*")
+        number= st.number_input("number", min_value=1, max_value=100, step=1)
+        code = st.text_input("pilot code (for ex LEC)")
+        dob = st.date_input("date of birth")
+        nationality = st.text_input("nationality")
+        url = st.text_input("url to his wikipedia")
         
-        inviato = st.form_submit_button("aggiungiaml")
-        
+        inviato = st.form_submit_button("add driver")
+        code = code.upper() if code != "" else None
         if inviato:
-            if nome and cognome:
-                query = "INSERT INTO drivers (name, surname, code) VALUES (?, ?, ?)"
+            if name and surname:
+                query = "INSERT INTO drivers (name, surname, number, code, dob, nationality, url) VALUES (?, ? ,?, ? ,? , ?, ?)"
                 with conn:
-                    conn.execute(query, (nome, cognome, codice))
-                    st.success(f"pilota {nome} {cognome} inserito con successo!")
+                    conn.execute(query, (name, surname,number, code, dob, nationality, url))
+                    st.success(f"{name} {surname} has been added to the pilots!")
             else:
-                st.warning("i parametri con scritto dentro * sono obbligatori!")
+                st.warning("all * fields are mandatory !")
+
+def pagina_calendario(conn):
+    st.write("view every race for a said year!")
+
+    anno_scelto = st.slider("Seleziona la stagione:", min_value=1950, max_value=2023, value=1950, step=1)
+
+    
+    query = """
+            SELECT 
+                round AS 'Tappa', 
+                name AS 'Gran Premio', 
+                date AS 'Data', 
+                time_race AS 'Orario'
+            FROM races 
+            WHERE year = ? 
+            ORDER BY round ASC
+        """
+        
+    #qua andrebbe aggiunto un winner o qualcosa di simile
+    df = pd.read_sql(query, conn, params=(anno_scelto,))
+            
+    if not df.empty:
+        st.success(f"Trovate {len(df)} gare per la stagione {anno_scelto}!")
+        st.dataframe(df, hide_index=True) 
+    else:
+        st.warning(f"Nessuna gara trovata per il {anno_scelto}.")
+
 
 def pagina_inserimento(conn):
     st.subheader("aggiungamo nuovi dati")
@@ -50,7 +81,9 @@ def ricercacircuiti(conn):
         st.dataframe(df)
 
 match sidebar:
-    case "ricerca circuiti per nazione":
+    case "search circuits":
         ricercacircuiti(conn)
-    case "inserimento di dati":
+    case "insert new data":
         pagina_inserimento(conn)
+    case "tracks per year visualization":
+        pagina_calendario(conn)
