@@ -28,7 +28,7 @@ def new_constructor(conn):
             else:
                 st.warning("All * fields are mandatory!")
 
-                
+
 def delete_constructor(conn):
     st.markdown("Delete constructor")
     st.write("Insert the constructor's name to remove it from the database (this is not reversible).")
@@ -337,9 +337,9 @@ def insertpage(conn):
         case "Drivers":
             new_driver(conn)
         case "Circuits":
-            print("")
+            new_circuit(conn)
         case "Constructors":
-            print("")
+            new_constructor(conn)
 
         case "Races":
             print("")
@@ -360,7 +360,7 @@ def modifypage(conn):
             print("")
 
         case "Constructors":
-            print("")
+            alter_constructor(conn)
 
         case "Races":
             print("")
@@ -381,7 +381,7 @@ def deletepage(conn):
             print("")
 
         case "Constructors":
-            print("")
+            delete_constructor(conn)
 
         case "Races":
             print("")
