@@ -1,32 +1,45 @@
-import sqlite3
+import psycopg2
 import pandas as pd
 import streamlit as st
 
-conn = sqlite3.connect("f1.db", check_same_thread=False)
+@st.cache_resource
+def get_connection():
+    return psycopg2.connect(
+        host="db", 
+        database="f1db",
+        user="postgres",
+        password="password",
+        port="5432"
+    )
+
+conn = get_connection()
 
 st.title("F1 Data")
-#st.write("c'è da divertirsi")
 st.sidebar.title("Choose an operation")
-sidebar=st.sidebar.radio("", ["Team carry", "Insert new data", "Modify data", "Delete data", "Yearly schedule"])
-
+sidebar = st.sidebar.radio("", ["Team carry", "Insert new data", "Modify data", "Delete data", "Yearly schedule"])
 
 def new_constructor(conn):
-    st.markdown("insert new data")
+    st.markdown("Insert new constructor")
     with st.form("new_constructor"):
-        name=st.text_input("constructor name*")
-        nationality=st.text_input("nationality*")
-        url=st.text_input("wikipedia URL")
+        name = st.text_input("Constructor name*")
+        nationality = st.text_input("Nationality*")
+        url = st.text_input("Wikipedia URL")
         inviato = st.form_submit_button("Add constructor")
         if inviato:
             if name and nationality:
-                query = "INSERT INTO constructors (name, nationality, url) VALUES (?, ?, ?)"
-                with conn:
-                    conn.execute(query, (name, nationality, url))
+                query = "INSERT INTO constructors (name, nationality, url) VALUES (%s, %s, %s)"
+                try:
+                    cur = conn.cursor()
+                    cur.execute(query, (name, nationality, url))
+                    conn.commit()
+                    cur.close()
                     st.toast("Constructor added!")
                     st.success(f"{name} has been added to the constructors!")
+                except Exception as e:
+                    st.error(f"Database error: {e}")
+                    conn.rollback() # Annulla in caso di errore
             else:
                 st.warning("All * fields are mandatory!")
-
 
 def delete_constructor(conn):
     st.markdown("Delete constructor")
@@ -40,7 +53,7 @@ def delete_constructor(conn):
         inviato = st.form_submit_button("Delete constructor", type="primary")
         if inviato:
             if search_name:
-                check_query = "SELECT constructorid, name, nationality FROM constructors WHERE name = ?"
+                check_query = "SELECT constructorid, name, nationality FROM constructors WHERE name = %s"
                 df_check = pd.read_sql(check_query, conn, params=(search_name,))
                 if len(df_check) == 0:
                     st.warning(f"No constructor found named '{search_name}'.")
@@ -50,18 +63,24 @@ def delete_constructor(conn):
                 else:
                     try:
                         if search_id is not None:
-                            query, parameters = "DELETE FROM constructors WHERE constructorid = ?", (search_id,)
+                            query, parameters = "DELETE FROM constructors WHERE constructorid = %s", (search_id,)
                         else:
-                            query, parameters = "DELETE FROM constructors WHERE name = ?", (search_name,)
-                        with conn:
-                            result = conn.execute(query, parameters)
-                            if result.rowcount > 0:
-                                st.success(f"Constructor '{search_name}' deleted successfully!")
-                                st.toast("Constructor deleted!")
-                            else:
-                                st.error("Constructor not deleted. Check if the ID is correct.")
+                            query, parameters = "DELETE FROM constructors WHERE name = %s", (search_name,)
+                        
+                        cur = conn.cursor()
+                        cur.execute(query, parameters)
+                        rowcount = cur.rowcount
+                        conn.commit()
+                        cur.close()
+                        
+                        if rowcount > 0:
+                            st.success(f"Constructor '{search_name}' deleted successfully!")
+                            st.toast("Constructor deleted!")
+                        else:
+                            st.error("Constructor not deleted. Check if the ID is correct.")
                     except Exception as e:
                         st.error(f"Database error: {e}")
+                        conn.rollback()
             else:
                 st.warning("Constructor name is mandatory!")
 
@@ -83,7 +102,7 @@ def alter_constructor(conn):
         inviato = st.form_submit_button("Update Constructor", use_container_width=True)
         if inviato:
             if search_name:
-                check_query = "SELECT constructorid, name, nationality FROM constructors WHERE name = ?"
+                check_query = "SELECT constructorid, name, nationality FROM constructors WHERE name = %s"
                 df_check = pd.read_sql(check_query, conn, params=(search_name,))
                 if len(df_check) == 0:
                     st.warning(f"No constructor found named '{search_name}'.")
@@ -92,26 +111,31 @@ def alter_constructor(conn):
                     st.dataframe(df_check, hide_index=True)
                 else:
                     update_fields, parameters = [], []
-                    if new_name: update_fields.append("name = ?"); parameters.append(new_name)
-                    if new_nationality: update_fields.append("nationality = ?"); parameters.append(new_nationality)
-                    if new_url: update_fields.append("url = ?"); parameters.append(new_url)
+                    if new_name: update_fields.append("name = %s"); parameters.append(new_name)
+                    if new_nationality: update_fields.append("nationality = %s"); parameters.append(new_nationality)
+                    if new_url: update_fields.append("url = %s"); parameters.append(new_url)
                     if not update_fields:
                         st.warning("Update at least one parameter")
                     else:
                         set_clause = ", ".join(update_fields)
                         if search_id is not None:
-                            query = f"UPDATE constructors SET {set_clause} WHERE constructorid = ?"
+                            query = f"UPDATE constructors SET {set_clause} WHERE constructorid = %s"
                             parameters.append(search_id)
                         else:
-                            query = f"UPDATE constructors SET {set_clause} WHERE name = ?"
+                            query = f"UPDATE constructors SET {set_clause} WHERE name = %s"
                             parameters.append(search_name)
-                        with conn:
-                            conn.execute(query, tuple(parameters))
+                        try:
+                            cur = conn.cursor()
+                            cur.execute(query, tuple(parameters))
+                            conn.commit()
+                            cur.close()
                             st.success(f"Constructor '{search_name}' updated successfully!")
                             st.toast("Constructor updated!")
+                        except Exception as e:
+                            st.error(f"Database error: {e}")
+                            conn.rollback()
             else:
                 st.warning("Constructor name is mandatory!")
-
 
 def new_circuit(conn):
     st.markdown("Insert new circuit")
@@ -129,11 +153,17 @@ def new_circuit(conn):
         inviato = st.form_submit_button("Add circuit")
         if inviato:
             if name:
-                query = "INSERT INTO circuits (name, location, country, lat, lng, alt, url) VALUES (?, ?, ?, ?, ?, ?, ?)"
-                with conn:
-                    conn.execute(query, (name, location, country, lat, lng, alt, url))
+                query = "INSERT INTO circuits (name, location, country, lat, lng, alt, url) VALUES (%s, %s, %s, %s, %s, %s, %s)"
+                try:
+                    cur = conn.cursor()
+                    cur.execute(query, (name, location, country, lat, lng, alt, url))
+                    conn.commit()
+                    cur.close()
                     st.toast("Circuit added!")
                     st.success(f"{name} has been added to the circuits!")
+                except Exception as e:
+                    st.error(f"Database error: {e}")
+                    conn.rollback()
             else:
                 st.warning("Circuit name is mandatory!")
 
@@ -162,7 +192,7 @@ def alter_circuit(conn):
         inviato = st.form_submit_button("Update Circuit", use_container_width=True)
         if inviato:
             if search_name:
-                check_query = "SELECT circuitid, name, location, country FROM circuits WHERE name = ?"
+                check_query = "SELECT circuitid, name, location, country FROM circuits WHERE name = %s"
                 df_check = pd.read_sql(check_query, conn, params=(search_name,))
                 if len(df_check) == 0:
                     st.warning(f"No circuit found named '{search_name}'.")
@@ -171,30 +201,35 @@ def alter_circuit(conn):
                     st.dataframe(df_check, hide_index=True)
                 else:
                     update_fields, parameters = [], []
-                    if new_name: update_fields.append("name = ?"); parameters.append(new_name)
-                    if new_location: update_fields.append("location = ?"); parameters.append(new_location)
-                    if new_country: update_fields.append("country = ?"); parameters.append(new_country)
-                    if new_lat is not None: update_fields.append("lat = ?"); parameters.append(new_lat)
-                    if new_lng is not None: update_fields.append("lng = ?"); parameters.append(new_lng)
-                    if new_alt is not None: update_fields.append("alt = ?"); parameters.append(new_alt)
-                    if new_url: update_fields.append("url = ?"); parameters.append(new_url)
+                    if new_name: update_fields.append("name = %s"); parameters.append(new_name)
+                    if new_location: update_fields.append("location = %s"); parameters.append(new_location)
+                    if new_country: update_fields.append("country = %s"); parameters.append(new_country)
+                    if new_lat is not None: update_fields.append("lat = %s"); parameters.append(new_lat)
+                    if new_lng is not None: update_fields.append("lng = %s"); parameters.append(new_lng)
+                    if new_alt is not None: update_fields.append("alt = %s"); parameters.append(new_alt)
+                    if new_url: update_fields.append("url = %s"); parameters.append(new_url)
                     if not update_fields:
                         st.warning("Update at least one parameter")
                     else:
                         set_clause = ", ".join(update_fields)
                         if search_id is not None:
-                            query = f"UPDATE circuits SET {set_clause} WHERE circuitid = ?"
+                            query = f"UPDATE circuits SET {set_clause} WHERE circuitid = %s"
                             parameters.append(search_id)
                         else:
-                            query = f"UPDATE circuits SET {set_clause} WHERE name = ?"
+                            query = f"UPDATE circuits SET {set_clause} WHERE name = %s"
                             parameters.append(search_name)
-                        with conn:
-                            conn.execute(query, tuple(parameters))
+                        try:
+                            cur = conn.cursor()
+                            cur.execute(query, tuple(parameters))
+                            conn.commit()
+                            cur.close()
                             st.success(f"Circuit '{search_name}' updated successfully!")
                             st.toast("Circuit updated!")
+                        except Exception as e:
+                            st.error(f"Database error: {e}")
+                            conn.rollback()
             else:
                 st.warning("Circuit name is mandatory!")
-
 
 def delete_circuit(conn):
     st.markdown("Delete circuit")
@@ -208,7 +243,7 @@ def delete_circuit(conn):
         inviato = st.form_submit_button("Delete circuit", type="primary")
         if inviato:
             if search_name:
-                check_query = "SELECT circuitid, name, location, country FROM circuits WHERE name = ?"
+                check_query = "SELECT circuitid, name, location, country FROM circuits WHERE name = %s"
                 df_check = pd.read_sql(check_query, conn, params=(search_name,))
                 if len(df_check) == 0:
                     st.warning(f"No circuit found named '{search_name}'.")
@@ -218,18 +253,24 @@ def delete_circuit(conn):
                 else:
                     try:
                         if search_id is not None:
-                            query, parameters = "DELETE FROM circuits WHERE circuitid = ?", (search_id,)
+                            query, parameters = "DELETE FROM circuits WHERE circuitid = %s", (search_id,)
                         else:
-                            query, parameters = "DELETE FROM circuits WHERE name = ?", (search_name,)
-                        with conn:
-                            result = conn.execute(query, parameters)
-                            if result.rowcount > 0:
-                                st.success(f"Circuit '{search_name}' deleted successfully!")
-                                st.toast("Circuit deleted!")
-                            else:
-                                st.error("Circuit not deleted. Check if the ID is correct.")
+                            query, parameters = "DELETE FROM circuits WHERE name = %s", (search_name,)
+                        
+                        cur = conn.cursor()
+                        cur.execute(query, parameters)
+                        rowcount = cur.rowcount
+                        conn.commit()
+                        cur.close()
+                        
+                        if rowcount > 0:
+                            st.success(f"Circuit '{search_name}' deleted successfully!")
+                            st.toast("Circuit deleted!")
+                        else:
+                            st.error("Circuit not deleted. Check if the ID is correct.")
                     except Exception as e:
                         st.error(f"Database error: {e}")
+                        conn.rollback()
             else:
                 st.warning("Circuit name is mandatory!")
 
@@ -240,11 +281,17 @@ def new_status(conn):
         inviato = st.form_submit_button("Add status")
         if inviato:
             if status:
-                query = "INSERT INTO status (status) VALUES (?)"
-                with conn:
-                    conn.execute(query, (status,))
+                query = "INSERT INTO status (status) VALUES (%s)"
+                try:
+                    cur = conn.cursor()
+                    cur.execute(query, (status,))
+                    conn.commit()
+                    cur.close()
                     st.toast("Status added!")
                     st.success(f"Status '{status}' has been added!")
+                except Exception as e:
+                    st.error(f"Database error: {e}")
+                    conn.rollback()
             else:
                 st.warning("Status field is mandatory!")
 
@@ -261,10 +308,16 @@ def alter_status(conn):
         if inviato:
             if new_status:
                 statusid = status_opts[current_status]
-                with conn:
-                    conn.execute("UPDATE status SET status = ? WHERE statusid = ?", (new_status, statusid))
+                try:
+                    cur = conn.cursor()
+                    cur.execute("UPDATE status SET status = %s WHERE statusid = %s", (new_status, statusid))
+                    conn.commit()
+                    cur.close()
                     st.success(f"Status '{current_status}' updated to '{new_status}'!")
                     st.toast("Status updated!")
+                except Exception as e:
+                    st.error(f"Database error: {e}")
+                    conn.rollback()
             else:
                 st.warning("New status label is mandatory!")
 
@@ -279,16 +332,19 @@ def delete_status(conn):
         if inviato:
             try:
                 statusid = status_opts[selected_status]
-                with conn:
-                    result = conn.execute("DELETE FROM status WHERE statusid = ?", (statusid,))
-                    if result.rowcount > 0:
-                        st.success(f"Status '{selected_status}' deleted successfully!")
-                        st.toast("Status deleted!")
-                    else:
-                        st.error("Status not deleted.")
+                cur = conn.cursor()
+                cur.execute("DELETE FROM status WHERE statusid = %s", (statusid,))
+                rowcount = cur.rowcount
+                conn.commit()
+                cur.close()
+                if rowcount > 0:
+                    st.success(f"Status '{selected_status}' deleted successfully!")
+                    st.toast("Status deleted!")
+                else:
+                    st.error("Status not deleted.")
             except Exception as e:
                 st.error(f"Database error: {e}")
-
+                conn.rollback()
 
 def new_race(conn):
     st.markdown("Insert new race")
@@ -315,17 +371,22 @@ def new_race(conn):
             if name and year and round_n and date and circuit_name:
                 circuitid = circuit_options[circuit_name]
                 query = """INSERT INTO races (year, round, circuitid, name, date, time_race, url, quali_date, quali_time, sprint_date, sprint_time)
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"""
-                with conn:
-                    conn.execute(query, (year, round_n, circuitid, name, str(date),
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"""
+                try:
+                    cur = conn.cursor()
+                    cur.execute(query, (year, round_n, circuitid, name, str(date),
                                          time_race or None, url or None,
                                          str(quali_date), quali_time or None,
                                          str(sprint_date), sprint_time or None))
+                    conn.commit()
+                    cur.close()
                     st.toast("Race added!")
                     st.success(f"{name} {year} has been added!")
+                except Exception as e:
+                    st.error(f"Database error: {e}")
+                    conn.rollback()
             else:
                 st.warning("All * fields are mandatory!")
-
 
 def alter_race(conn):
     st.markdown("Update Race Info")
@@ -356,7 +417,7 @@ def alter_race(conn):
         inviato = st.form_submit_button("Update Race", use_container_width=True)
         if inviato:
             if search_name and search_year:
-                check_query = "SELECT raceid, name, year, round FROM races WHERE name = ? AND year = ?"
+                check_query = "SELECT raceid, name, year, round FROM races WHERE name = %s AND year = %s"
                 df_check = pd.read_sql(check_query, conn, params=(search_name, search_year))
                 if len(df_check) == 0:
                     st.warning(f"No race found named '{search_name}' in {search_year}.")
@@ -365,29 +426,35 @@ def alter_race(conn):
                     st.dataframe(df_check, hide_index=True)
                 else:
                     update_fields, parameters = [], []
-                    if new_name: update_fields.append("name = ?"); parameters.append(new_name)
-                    if new_date: update_fields.append("date = ?"); parameters.append(new_date)
-                    if new_time: update_fields.append("time_race = ?"); parameters.append(new_time)
-                    if new_round is not None: update_fields.append("round = ?"); parameters.append(new_round)
-                    if new_quali_date: update_fields.append("quali_date = ?"); parameters.append(new_quali_date)
-                    if new_quali_time: update_fields.append("quali_time = ?"); parameters.append(new_quali_time)
-                    if new_sprint_date: update_fields.append("sprint_date = ?"); parameters.append(new_sprint_date)
-                    if new_sprint_time: update_fields.append("sprint_time = ?"); parameters.append(new_sprint_time)
-                    if new_url: update_fields.append("url = ?"); parameters.append(new_url)
+                    if new_name: update_fields.append("name = %s"); parameters.append(new_name)
+                    if new_date: update_fields.append("date = %s"); parameters.append(new_date)
+                    if new_time: update_fields.append("time_race = %s"); parameters.append(new_time)
+                    if new_round is not None: update_fields.append("round = %s"); parameters.append(new_round)
+                    if new_quali_date: update_fields.append("quali_date = %s"); parameters.append(new_quali_date)
+                    if new_quali_time: update_fields.append("quali_time = %s"); parameters.append(new_quali_time)
+                    if new_sprint_date: update_fields.append("sprint_date = %s"); parameters.append(new_sprint_date)
+                    if new_sprint_time: update_fields.append("sprint_time = %s"); parameters.append(new_sprint_time)
+                    if new_url: update_fields.append("url = %s"); parameters.append(new_url)
                     if not update_fields:
                         st.warning("Update at least one parameter")
                     else:
                         set_clause = ", ".join(update_fields)
                         if search_id is not None:
-                            query = f"UPDATE races SET {set_clause} WHERE raceid = ?"
+                            query = f"UPDATE races SET {set_clause} WHERE raceid = %s"
                             parameters.append(search_id)
                         else:
-                            query = f"UPDATE races SET {set_clause} WHERE name = ? AND year = ?"
+                            query = f"UPDATE races SET {set_clause} WHERE name = %s AND year = %s"
                             parameters.extend([search_name, search_year])
-                        with conn:
-                            conn.execute(query, tuple(parameters))
+                        try:
+                            cur = conn.cursor()
+                            cur.execute(query, tuple(parameters))
+                            conn.commit()
+                            cur.close()
                             st.success(f"Race '{search_name} {search_year}' updated successfully!")
                             st.toast("Race updated!")
+                        except Exception as e:
+                            st.error(f"Database error: {e}")
+                            conn.rollback()
             else:
                 st.warning("Race name and year are mandatory!")
 
@@ -405,7 +472,7 @@ def delete_race(conn):
         inviato = st.form_submit_button("Delete race", type="primary")
         if inviato:
             if search_name and search_year:
-                check_query = "SELECT raceid, name, year, round FROM races WHERE name = ? AND year = ?"
+                check_query = "SELECT raceid, name, year, round FROM races WHERE name = %s AND year = %s"
                 df_check = pd.read_sql(check_query, conn, params=(search_name, search_year))
                 if len(df_check) == 0:
                     st.warning(f"No race found named '{search_name}' in {search_year}.")
@@ -415,21 +482,25 @@ def delete_race(conn):
                 else:
                     try:
                         if search_id is not None:
-                            query, parameters = "DELETE FROM races WHERE raceid = ?", (search_id,)
+                            query, parameters = "DELETE FROM races WHERE raceid = %s", (search_id,)
                         else:
-                            query, parameters = "DELETE FROM races WHERE name = ? AND year = ?", (search_name, search_year)
-                        with conn:
-                            result = conn.execute(query, parameters)
-                            if result.rowcount > 0:
-                                st.success(f"Race '{search_name} {search_year}' deleted successfully!")
-                                st.toast("Race deleted!")
-                            else:
-                                st.error("Race not deleted. Check if the ID is correct.")
+                            query, parameters = "DELETE FROM races WHERE name = %s AND year = %s", (search_name, search_year)
+                        
+                        cur = conn.cursor()
+                        cur.execute(query, parameters)
+                        rowcount = cur.rowcount
+                        conn.commit()
+                        cur.close()
+                        if rowcount > 0:
+                            st.success(f"Race '{search_name} {search_year}' deleted successfully!")
+                            st.toast("Race deleted!")
+                        else:
+                            st.error("Race not deleted. Check if the ID is correct.")
                     except Exception as e:
                         st.error(f"Database error: {e}")
+                        conn.rollback()
             else:
                 st.warning("Race name and year are mandatory!")
-
 
 def new_result(conn):
     st.markdown("Insert new result")
@@ -472,21 +543,25 @@ def new_result(conn):
             if race_name and driver_name and constructor_name and positionOrder:
                 query = """INSERT INTO results (raceid, driverid, constructorid, statusid, number, grid, position,
                            positionText, positionOrder, points, laps, milliseconds, fastestLap, rank, fastestLapTime, fastestLapSpeed)
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"""
-                with conn:
-                    conn.execute(query, (
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"""
+                try:
+                    cur = conn.cursor()
+                    cur.execute(query, (
                         race_opts[race_name], driver_opts[driver_name],
                         constructor_opts[constructor_name], status_opts[status_name],
                         number, grid, position, positionText or None, positionOrder,
                         points, laps, milliseconds, fastestLap, rank,
                         fastestLapTime or None, fastestLapSpeed
                     ))
+                    conn.commit()
+                    cur.close()
                     st.toast("Result added!")
                     st.success("Result has been added successfully!")
+                except Exception as e:
+                    st.error(f"Database error: {e}")
+                    conn.rollback()
             else:
                 st.warning("All * fields are mandatory!")
-
-
 
 def alter_result(conn):
     st.markdown("Update Result Info")
@@ -511,32 +586,38 @@ def alter_result(conn):
             new_fastestLapSpeed = st.number_input("New fastest lap speed (km/h)", min_value=0.0, step=0.1, value=None)
         inviato = st.form_submit_button("Update Result", use_container_width=True)
         if inviato:
-            check_df = pd.read_sql("SELECT resultid FROM results WHERE resultid = ?", conn, params=(search_id,))
+            check_df = pd.read_sql("SELECT resultid FROM results WHERE resultid = %s", conn, params=(search_id,))
             if len(check_df) == 0:
                 st.warning(f"No result found with ID {search_id}.")
             else:
                 update_fields, parameters = [], []
-                if new_grid is not None: update_fields.append("grid = ?"); parameters.append(new_grid)
-                if new_position is not None: update_fields.append("position = ?"); parameters.append(new_position)
-                if new_positionText: update_fields.append("positionText = ?"); parameters.append(new_positionText)
-                if new_positionOrder is not None: update_fields.append("positionOrder = ?"); parameters.append(new_positionOrder)
-                if new_points is not None: update_fields.append("points = ?"); parameters.append(new_points)
-                if new_laps is not None: update_fields.append("laps = ?"); parameters.append(new_laps)
-                if new_ms is not None: update_fields.append("milliseconds = ?"); parameters.append(new_ms)
-                if new_fastestLap is not None: update_fields.append("fastestLap = ?"); parameters.append(new_fastestLap)
-                if new_rank is not None: update_fields.append("rank = ?"); parameters.append(new_rank)
-                if new_fastestLapTime: update_fields.append("fastestLapTime = ?"); parameters.append(new_fastestLapTime)
-                if new_fastestLapSpeed is not None: update_fields.append("fastestLapSpeed = ?"); parameters.append(new_fastestLapSpeed)
+                if new_grid is not None: update_fields.append("grid = %s"); parameters.append(new_grid)
+                if new_position is not None: update_fields.append("position = %s"); parameters.append(new_position)
+                if new_positionText: update_fields.append("positionText = %s"); parameters.append(new_positionText)
+                if new_positionOrder is not None: update_fields.append("positionOrder = %s"); parameters.append(new_positionOrder)
+                if new_points is not None: update_fields.append("points = %s"); parameters.append(new_points)
+                if new_laps is not None: update_fields.append("laps = %s"); parameters.append(new_laps)
+                if new_ms is not None: update_fields.append("milliseconds = %s"); parameters.append(new_ms)
+                if new_fastestLap is not None: update_fields.append("fastestLap = %s"); parameters.append(new_fastestLap)
+                if new_rank is not None: update_fields.append("rank = %s"); parameters.append(new_rank)
+                if new_fastestLapTime: update_fields.append("fastestLapTime = %s"); parameters.append(new_fastestLapTime)
+                if new_fastestLapSpeed is not None: update_fields.append("fastestLapSpeed = %s"); parameters.append(new_fastestLapSpeed)
                 if not update_fields:
                     st.warning("Update at least one parameter")
                 else:
                     set_clause = ", ".join(update_fields)
-                    query = f"UPDATE results SET {set_clause} WHERE resultid = ?"
+                    query = f"UPDATE results SET {set_clause} WHERE resultid = %s"
                     parameters.append(search_id)
-                    with conn:
-                        conn.execute(query, tuple(parameters))
+                    try:
+                        cur = conn.cursor()
+                        cur.execute(query, tuple(parameters))
+                        conn.commit()
+                        cur.close()
                         st.success(f"Result ID {search_id} updated successfully!")
                         st.toast("Result updated!")
+                    except Exception as e:
+                        st.error(f"Database error: {e}")
+                        conn.rollback()
 
 def delete_result(conn):
     st.markdown("Delete result")
@@ -545,23 +626,27 @@ def delete_result(conn):
         result_id = st.number_input("Result ID*", min_value=1, step=1)
         inviato = st.form_submit_button("Delete result", type="primary")
         if inviato:
-            check_df = pd.read_sql("SELECT resultid FROM results WHERE resultid = ?", conn, params=(result_id,))
+            check_df = pd.read_sql("SELECT resultid FROM results WHERE resultid = %s", conn, params=(result_id,))
             if len(check_df) == 0:
                 st.warning(f"No result found with ID {result_id}.")
             else:
                 try:
-                    with conn:
-                        result = conn.execute("DELETE FROM results WHERE resultid = ?", (result_id,))
-                        if result.rowcount > 0:
-                            st.success(f"Result ID {result_id} deleted successfully!")
-                            st.toast("Result deleted!")
-                        else:
-                            st.error("Result not deleted.")
+                    cur = conn.cursor()
+                    cur.execute("DELETE FROM results WHERE resultid = %s", (result_id,))
+                    rowcount = cur.rowcount
+                    conn.commit()
+                    cur.close()
+                    if rowcount > 0:
+                        st.success(f"Result ID {result_id} deleted successfully!")
+                        st.toast("Result deleted!")
+                    else:
+                        st.error("Result not deleted.")
                 except Exception as e:
                     st.error(f"Database error: {e}")
+                    conn.rollback()
 
 def new_driver(conn):
-    st.markdown("Insert new data")
+    st.markdown("Insert new Driver")
     with st.form("newpilot"):
         col1, col2 = st.columns(2)
 
@@ -579,13 +664,19 @@ def new_driver(conn):
         code = code.upper() if code != "" else None
         if inviato:
             if name and surname:
-                query = "INSERT INTO drivers (name, surname, number, code, dob, nationality, url) VALUES (?, ? ,?, ? ,? , ?, ?)"
-                with conn:
-                    conn.execute(query, (name, surname,number, code, dob, nationality, url))
+                query = "INSERT INTO drivers (name, surname, number, code, dob, nationality, url) VALUES (%s, %s ,%s, %s ,%s , %s, %s)"
+                try:
+                    cur = conn.cursor()
+                    cur.execute(query, (name, surname, number, code, dob, nationality, url))
+                    conn.commit()
+                    cur.close()
                     st.toast("Driver added!")
                     st.success(f"{name} {surname} has been added to the pilots!")
+                except Exception as e:
+                    st.error(f"Database error: {e}")
+                    conn.rollback()
             else:
-                st.warning("all * fields are mandatory !")
+                st.warning("All * fields are mandatory!")
 
 def alter_driver(conn):
     st.markdown("Update Driver Info")
@@ -618,55 +709,45 @@ def alter_driver(conn):
         
         if inviato:
             if search_name and search_surname:
-                #looking for double names
-                check_query = "SELECT driverid, name, surname, dob, nationality FROM drivers WHERE name = ? AND surname = ?"
+                check_query = "SELECT driverid, name, surname, dob, nationality FROM drivers WHERE name = %s AND surname = %s"
                 df_check = pd.read_sql(check_query, conn, params=(search_name, search_surname))
                     
                 if len(df_check) == 0:
                         st.warning(f"No driver found named {search_name} {search_surname}.")
-                        
                 elif len(df_check) > 1 and search_id is None:
-                    st.warning(" Multiple drivers found with this name, check the list below and specify the correct driver id in the search box")
+                    st.warning("Multiple drivers found with this name, check the list below and specify the correct driver id in the search box")
                     st.dataframe(df_check, hide_index=True)
-                
-            
                 else:
                     update_fields = []
                     parameters = []
-                    if new_name != "":
-                        update_fields.append("name = ?")
-                        parameters.append(new_name)
-                    if new_surname != "":
-                        update_fields.append("surname = ?")
-                        parameters.append(new_surname)
-                    if new_number is not None:
-                        update_fields.append("number = ?")
-                        parameters.append(new_number)
-                    if new_code != "":
-                        update_fields.append("code = ?")
-                        parameters.append(new_code.upper())
-                    if new_nationality != "":
-                        update_fields.append("nationality = ?")
-                        parameters.append(new_nationality)
-                    if new_url != "":
-                        update_fields.append("url = ?")
-                        parameters.append(new_url)
+                    if new_name != "": update_fields.append("name = %s"); parameters.append(new_name)
+                    if new_surname != "": update_fields.append("surname = %s"); parameters.append(new_surname)
+                    if new_number is not None: update_fields.append("number = %s"); parameters.append(new_number)
+                    if new_code != "": update_fields.append("code = %s"); parameters.append(new_code.upper())
+                    if new_nationality != "": update_fields.append("nationality = %s"); parameters.append(new_nationality)
+                    if new_url != "": update_fields.append("url = %s"); parameters.append(new_url)
             
                     if len(update_fields) == 0:
                         st.warning("Update at least one parameter")
                     else:
                         set_clause = ", ".join(update_fields)
                         if search_id is not None:
-                            query = f"UPDATE drivers SET {set_clause} WHERE driverid = ?"
+                            query = f"UPDATE drivers SET {set_clause} WHERE driverid = %s"
                             parameters.append(search_id)
                         else:
-                            query = f"UPDATE drivers SET {set_clause} WHERE name = ? AND surname = ?"
-                            parameters.extend([search_name, search_surname]) #per non aggiungere una lista ma i singoli elementi di essa 
+                            query = f"UPDATE drivers SET {set_clause} WHERE name = %s AND surname = %s"
+                            parameters.extend([search_name, search_surname]) 
                         
-                        with conn:
-                            conn.execute(query, tuple(parameters))
+                        try:
+                            cur = conn.cursor()
+                            cur.execute(query, tuple(parameters))
+                            conn.commit()
+                            cur.close()
                             st.success(f"Driver {search_name} {search_surname} updated successfully!")
                             st.toast("Driver updated!")
+                        except Exception as e:
+                            st.error(f"Database error: {e}")
+                            conn.rollback()
             else:
                 st.warning("Driver's name and surname are mandatory to find the driver!")
 
@@ -688,53 +769,53 @@ def delete_driver(conn):
         
         if inviato:
             if search_name and search_surname:
-                
-                check_query = "SELECT driverid, name, surname, dob, nationality FROM drivers WHERE name = ? AND surname = ?"
+                check_query = "SELECT driverid, name, surname, dob, nationality FROM drivers WHERE name = %s AND surname = %s"
                 df_check = pd.read_sql(check_query, conn, params=(search_name, search_surname))
                     
                 if len(df_check) == 0:
                     st.warning(f"No driver found named {search_name} {search_surname}.")
-                        
                 elif len(df_check) > 1 and search_id is None:
                     st.warning("Multiple drivers found with this name. Check the list below and specify the correct driver ID to delete.")
                     st.dataframe(df_check, hide_index=True)
-                
                 else:
                     if search_id is not None:
-                        query = "DELETE FROM drivers WHERE driverid = ?"
+                        query = "DELETE FROM drivers WHERE driverid = %s"
                         parameters = (search_id,)
                     else:
-                        query = "DELETE FROM drivers WHERE name = ? AND surname = ?"
+                        query = "DELETE FROM drivers WHERE name = %s AND surname = %s"
                         parameters = (search_name, search_surname)
                     
                     try:
-                        with conn:
-                            result = conn.execute(query, parameters)
-                            if result.rowcount > 0:
-                                st.success(f"Driver {search_name} {search_surname} has been successfully deleted!")
-                                st.toast("Driver deleted!")
-                            else:
-                                st.error("Error! Driver not deleted. Check if the Driver ID is correct.")
+                        cur = conn.cursor()
+                        cur.execute(query, parameters)
+                        rowcount = cur.rowcount
+                        conn.commit()
+                        cur.close()
+                        if rowcount > 0:
+                            st.success(f"Driver {search_name} {search_surname} has been successfully deleted!")
+                            st.toast("Driver deleted!")
+                        else:
+                            st.error("Error! Driver not deleted. Check if the Driver ID is correct.")
                     except Exception as e:
                         st.error(f"Database error: {e}")
+                        conn.rollback()
             else:
                 st.warning("Driver's name and surname are mandatory to find the driver!")
 
 def yearly_schedule(conn):
     st.subheader("View the yearly schedule with race winners")
-
     anno_scelto = st.number_input("Choose a season year to view (from 1950 to 2024)", min_value=1950, max_value=2024, step=1)
 
     query = """
         SELECT 
-            ra.round AS 'Round', 
-            ra.name AS 'Grand Prix', 
-            ra.date AS 'Date',
-            d.name || ' ' || d.surname AS 'Winner'
+            ra.round AS "Round", 
+            ra.name AS "Grand Prix", 
+            ra.date AS "Date",
+            d.name || ' ' || d.surname AS "Winner"
         FROM races ra
         LEFT JOIN results re ON ra.raceid = re.raceid AND re.positionOrder = 1
         LEFT JOIN drivers d ON re.driverid = d.driverid
-        WHERE ra.year = ? 
+        WHERE ra.year = %s 
         ORDER BY ra.round ASC
     """
         
@@ -747,66 +828,36 @@ def yearly_schedule(conn):
         st.warning(f"Nessuna gara trovata per il {anno_scelto}.")
 
 def insertpage(conn):
-    insert=st.selectbox("What do you want to insert? ",["Drivers", "Circuits", "Constructors", "Races", "Results", "Status"])
-
+    insert = st.selectbox("What do you want to insert? ",["Drivers", "Circuits", "Constructors", "Races", "Results", "Status"])
     match insert:
-        case "Drivers":
-            new_driver(conn)
-        case "Circuits":
-            new_circuit(conn)
-        case "Constructors":
-            new_constructor(conn)
-
-        case "Races":
-            new_race(conn)
-
-        case "Results":
-            new_result(conn)
-        
-        case "Status":
-            new_status(conn)
+        case "Drivers": new_driver(conn)
+        case "Circuits": new_circuit(conn)
+        case "Constructors": new_constructor(conn)
+        case "Races": new_race(conn)
+        case "Results": new_result(conn)
+        case "Status": new_status(conn)
 
 def modifypage(conn):
     st.subheader("Which table do you want to modify?")
-    insert=st.selectbox("", ["Drivers", "Circuits", "Constructors", "Races", "Results", "Status"])
+    insert = st.selectbox("", ["Drivers", "Circuits", "Constructors", "Races", "Results", "Status"])
     match insert:
-        case "Drivers":
-            alter_driver(conn)
-        case "Circuits":
-            alter_circuit(conn)
-
-        case "Constructors":
-            alter_constructor(conn)
-
-        case "Races":
-            alter_race(conn)
-
-        case "Results":
-            alter_result(conn)
-        
-        case "Status":
-            alter_status(conn)
+        case "Drivers": alter_driver(conn)
+        case "Circuits": alter_circuit(conn)
+        case "Constructors": alter_constructor(conn)
+        case "Races": alter_race(conn)
+        case "Results": alter_result(conn)
+        case "Status": alter_status(conn)
 
 def deletepage(conn):
     st.subheader("Which table do you want to delete data from?")
-    insert=st.selectbox("", ["Drivers", "Circuits", "Constructors", "Races", "Results", "Status"])
+    insert = st.selectbox("", ["Drivers", "Circuits", "Constructors", "Races", "Results", "Status"])
     match insert:
-        case "Drivers":
-            delete_driver(conn)
-        case "Circuits":
-            delete_circuit(conn)
-
-        case "Constructors":
-            delete_constructor(conn)
-
-        case "Races":
-            delete_race(conn)
-
-        case "Results":
-            delete_result(conn)
-        
-        case "Status":
-            delete_status(conn)
+        case "Drivers": delete_driver(conn)
+        case "Circuits": delete_circuit(conn)
+        case "Constructors": delete_constructor(conn)
+        case "Races": delete_race(conn)
+        case "Results": delete_result(conn)
+        case "Status": delete_status(conn)
 
 def team_carry(conn):
     st.markdown("Team carry")
@@ -814,7 +865,6 @@ def team_carry(conn):
     
     year = st.number_input("Select Season:", min_value=1950, max_value=2024, value=2021, step=1)
     
-
     query = """
         WITH TeamStats AS (
             SELECT 
@@ -823,23 +873,23 @@ def team_carry(conn):
             FROM results re
             JOIN races ra ON re.raceid = ra.raceid
             JOIN constructors c ON re.constructorid = c.constructorid
-            WHERE ra.year = ?
+            WHERE ra.year = %s
             GROUP BY c.constructorid
         )
         
         SELECT 
-            d.name || ' ' || d.surname AS Driver,
-            c.name AS Constructor,
-            SUM(re.points) AS DriverPoints,
+            d.name || ' ' || d.surname AS "Driver",
+            c.name AS "Constructor",
+            SUM(re.points) AS "DriverPoints",
             ts.TotalTeamPoints,
-            ROUND((SUM(re.points) * 100.0) / ts.TotalTeamPoints, 2) AS 'Contribution to the team (%)'
-        FROM results re
+            ROUND(((SUM(re.points) * 100.0) / ts.TotalTeamPoints)::numeric, 2) AS "Contribution to the team (perc)"   --::numeric prende il risultato e lo mette come tipo numeric, quindi comprensibile da postgres (che non trasforma i tipi da solo)    
+            FROM results re
         JOIN drivers d ON re.driverid = d.driverid
         JOIN constructors c ON re.constructorid = c.constructorid
         JOIN races ra ON re.raceid = ra.raceid
         JOIN TeamStats ts ON c.constructorid = ts.constructorid  
-        WHERE ra.year = ?
-        GROUP BY d.driverid, c.name, ts.TotalTeamPoints
+        WHERE ra.year = %s AND ts.TotalTeamPoints > 0
+        GROUP BY d.driverid, d.name, d.surname, c.name, ts.TotalTeamPoints        
         ORDER BY ts.TotalTeamPoints DESC
     """
     
@@ -847,11 +897,10 @@ def team_carry(conn):
     if not df.empty:
         st.dataframe(df, hide_index=True, use_container_width=True)
         st.markdown("Contribution Chart")
-        df_chart = df.pivot(index="Constructor", columns="Driver", values="Contribution to the team (%)")        
+        df_chart = df.pivot(index="Constructor", columns="Driver", values="Contribution to the team (perc)")        
         st.bar_chart(df_chart)
     else:
         st.warning(f"No points data available for {year}.")
-
 
 match sidebar:
     case "Team carry":
