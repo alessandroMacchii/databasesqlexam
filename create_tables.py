@@ -100,10 +100,10 @@ with conn:
         rank INTEGER,
         fastestLapTime TEXT,
         fastestLapSpeed REAL,
-        FOREIGN KEY (raceid) REFERENCES races(raceid),
-        FOREIGN KEY (driverid) REFERENCES drivers(driverid),
-        FOREIGN KEY (constructorid) REFERENCES constructors(constructorid),
-        FOREIGN KEY (statusid) REFERENCES status(statusid)
+        FOREIGN KEY (raceid) REFERENCES races(raceid) ON DELETE CASCADE,
+        FOREIGN KEY (driverid) REFERENCES drivers(driverid) ON DELETE CASCADE,
+        FOREIGN KEY (constructorid) REFERENCES constructors(constructorid) ON DELETE SET NULL,
+        FOREIGN KEY (statusid) REFERENCES status(statusid) ON DELETE SET NULL
             );
                      """)
         
