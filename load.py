@@ -1,6 +1,26 @@
 import pandas as pd
 import numpy as np
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text 
+
+def align_sequences(engine):
+    print("Aligning ID counters in postgres")
+    
+    dictids = {
+        "status": "statusid",
+        "constructors": "constructorid",
+        "circuits": "circuitid",
+        "drivers": "driverid",
+        "races": "raceid",
+        "results": "resultid"
+    }
+    
+    with engine.connect() as connection:
+        for table, pk in dictids.items():
+            query = text(f"SELECT setval(pg_get_serial_sequence('{table}', '{pk}'), COALESCE(MAX({pk}), 1)) FROM {table};")
+            
+            connection.execute(query)
+            connection.commit()  
+            print(f"Sequence aligned for table: {table}")
 
 df_raw = pd.read_csv('f1.csv', low_memory=False) 
 
@@ -53,5 +73,7 @@ df_circuits.to_sql('circuits', engine, if_exists='append', index=False, chunksiz
 df_status.to_sql('status', engine, if_exists='append', index=False, chunksize=500)
 df_races.to_sql('races', engine, if_exists='append', index=False, chunksize=500)
 df_results.to_sql('results', engine, if_exists='append', index=False, chunksize=500)
+
+align_sequences(engine)
 
 print("Dati caricati in PostgreSQL con successo!")
